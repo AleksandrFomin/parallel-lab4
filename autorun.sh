@@ -3,9 +3,10 @@
 binary=$1
 N1=$2
 N2=$3
-delta=$(((N2-N1)/10))
+STEPS=20
+delta=$(((N2-N1)/${STEPS}))
 
-for i in {0..10}
+for i in $(seq 0 $STEPS)
 do
 	./${binary} $((N1+$i*$delta))
 done

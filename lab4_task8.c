@@ -19,6 +19,11 @@ void omp_set_nested(int val)
 {
 	val = 1;
 }
+
+int omp_get_num_procs()
+{
+	return 1;
+}
 #endif
 
 void fill_array(double *arr, int size, double left, double right, unsigned int *seedp)
@@ -134,7 +139,7 @@ void adjust(double *array, int n)
 	array[j] = item;
 }
 
-void heapsort(double *array, int n)
+void do_heapsort(double *array, int n)
 {
 	int i;
 	double t;
@@ -149,31 +154,105 @@ void heapsort(double *array, int n)
 	}
 }
 
-void mergeArrays(double *dst, double *arr1, double *arr2, int len1, int len2)
+double* merge_arr(double *arr1, int len1, double *arr2, int len2)
 {
-	int i, j, k;
-	i = j = k = 0;
-	for (i = 0; i < len1 && j < len2;) {
-		if (arr1[i] < arr2[j]) {
-			dst[k] = arr1[i];
-			k++;
-			i++;
-		} else {
-			dst[k] = arr2[j];
-			k++;
-			j++;
-		}
-	}
-	while (i < len1) {
-		dst[k] = arr1[i];
-		k++;
-		i++;
-	}
-	while (j < len2) {
-		dst[k] = arr2[j];
-		k++;
-		j++;
-	}
+    double *sorted = (double*)malloc(sizeof(double) * (len1 + len2));
+    int p1 = 0;
+    int p2 = 0;
+    int i = 0;
+
+    while (p1 < len1 || p2 < len2) {
+        if (p1 < len1 && p2 < len2) {
+            if (arr1[p1] <= arr2[p2]) {
+                sorted[i] = arr1[p1];
+                p1++;
+                i++;
+                continue;
+            }
+            if (arr2[p2] < arr1[p1]) {
+                sorted[i] = arr2[p2];
+                p2++;
+                i++;
+                continue;
+            }
+        }
+        if (p1 == len1) {
+            while (p2 < len2) {
+                sorted[i] = arr2[p2];
+                i++;
+                p2++;
+            }
+            break;
+        }
+        if (p2 == len2) {
+            while (p1 < len1) {
+                sorted[i] = arr1[p1];
+                i++;
+                p1++;
+            }
+            break;
+        }
+    }
+
+    // free(arr1);
+    return sorted;
+}
+
+// double* heapsort_on_cpus(double *arr, int len)
+// {
+//     int i;
+//     int k = omp_get_num_procs();
+//     int chunk = (len + k - 1) / k;
+
+//     #pragma omp parallel for default(none) private(i) shared(k, len, chunk, arr)
+//     for (i=0; i<k; i++)
+//     {
+//         int part_len = chunk < len - i * chunk ? chunk : len - i * chunk;
+//         double *part_arr = arr + i * chunk;
+//         printf("thread=%d part_len=%d\n", omp_get_thread_num(), part_len);
+//         do_heapsort(part_arr, part_len);
+//     }
+
+//     return arr;
+// }
+
+double* heapsort_on_cpus(double *arr, int len, int l, int r)
+{
+#ifdef _OPENMP
+    int first_part_len = len / 2;
+    int second_part_len = len - first_part_len;
+    double *first_arr = arr;
+    double *second_arr = arr + first_part_len;
+    
+    int second_half = l + (r + 1 - l) / 2;
+    #pragma omp parallel
+    {
+        if (omp_get_thread_num() == l) {
+            // printf("thread=%d len1=%d\n", omp_get_thread_num(), first_part_len);
+            if (r - l == 1)
+                do_heapsort(first_arr, first_part_len);
+            else
+                first_arr = heapsort_on_cpus(first_arr, first_part_len, l, second_half - 1);
+        }
+
+        if (omp_get_thread_num() == second_half) {
+            // printf("thread=%d len2=%d\n", omp_get_thread_num(), second_part_len);
+            if (r - l == 1)
+                do_heapsort(second_arr, second_part_len);
+            else
+                second_arr = heapsort_on_cpus(second_arr, second_part_len, second_half, r);
+        }
+    }
+    return merge_arr(first_arr, first_part_len, second_arr, second_part_len);
+#else
+    do_heapsort(arr, len);
+    return arr;
+#endif
+}
+
+double* heapsort(double *arr, int len)
+{
+	return heapsort_on_cpus(arr, len, 0, omp_get_num_procs() - 1);
 }
 
 double min_not_null(double *arr, int len)
@@ -210,11 +289,11 @@ void do_main(int argc, char* argv[], int *status)
 	int i, N, N2;
 	double T1, T2;
 	long delta_ms;
-	double *M1, *M2, *M2_copy, *MERGED;
+	double *M1, *M2, *M2_copy;
 	int A = 540;
 	unsigned int seed1, seed2;
 	// double X;
-	int iter = 10;
+	int iter = 50;
 
 	N = atoi(argv[1]); /* N равен первому параметру командной строки */
 	T1 = omp_get_wtime(); /* запомнить текущее время T1 */
@@ -222,7 +301,6 @@ void do_main(int argc, char* argv[], int *status)
 	M1 = malloc(sizeof(double) * N);
 	M2 = malloc(sizeof(double) * N / 2);
 	M2_copy = malloc(sizeof(double) * N / 2);
-	MERGED = malloc(sizeof(double) * N / 2);
 
 	for (i = 0; i < iter; i++) /* 50 экспериментов */
 	{	
@@ -245,21 +323,10 @@ void do_main(int argc, char* argv[], int *status)
 		apply_merge_func(M1, M2, N / 2);
 
 		N2 = N / 2;
+		M2 = heapsort(M2, N2);
+		// print_array(MERGED, N / 2);
 
-		#if defined(_OPENMP)
-		#pragma omp parallel sections
-		{
-				#pragma omp section
-				heapsort(M2, N2 / 2);
-				#pragma omp section
-				heapsort(M2 + (N2 / 2), (N2 + 1) / 2);
-		}
-		mergeArrays(MERGED, M2, M2 + (N2 / 2), N2 / 2, (N2 + 1) / 2);
-		#else
-		heapsort(M2, N2);
-		#endif
-
-		reduce(MERGED, N / 2);
+		reduce(M2, N / 2);
 		// printf("X = %f\n", X);
 	}
 	T2 = omp_get_wtime(); /* запомнить текущее время T2 */
@@ -270,7 +337,6 @@ void do_main(int argc, char* argv[], int *status)
 	free(M1);
 	free(M2);
 	free(M2_copy);
-	free(MERGED);
 }
 
 #if defined(_OPENMP)
@@ -288,7 +354,7 @@ void do_timer(int *status)
 		{
 			val = *status;
 		}
-		printf("Status = %d%%\n", val);
+		// printf("Status = %d%%\n", val);
 		sleep(1);
 	}
 }
