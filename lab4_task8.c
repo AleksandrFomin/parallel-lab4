@@ -198,62 +198,79 @@ double* merge_arr(double *arr1, int len1, double *arr2, int len2)
     return sorted;
 }
 
-// double* heapsort_on_cpus(double *arr, int len)
-// {
-//     int i;
-//     int k = omp_get_num_procs();
-//     int chunk = (len + k - 1) / k;
-
-//     #pragma omp parallel for default(none) private(i) shared(k, len, chunk, arr)
-//     for (i=0; i<k; i++)
-//     {
-//         int part_len = chunk < len - i * chunk ? chunk : len - i * chunk;
-//         double *part_arr = arr + i * chunk;
-//         printf("thread=%d part_len=%d\n", omp_get_thread_num(), part_len);
-//         do_heapsort(part_arr, part_len);
-//     }
-
-//     return arr;
-// }
-
-double* heapsort_on_cpus(double *arr, int len, int l, int r)
+double *merge_all_arr(double *arr, int len, int chunk)
 {
-#ifdef _OPENMP
-    int first_part_len = len / 2;
-    int second_part_len = len - first_part_len;
-    double *first_arr = arr;
-    double *second_arr = arr + first_part_len;
-    
-    int second_half = l + (r + 1 - l) / 2;
-    #pragma omp parallel
-    {
-        if (omp_get_thread_num() == l) {
-            // printf("thread=%d len1=%d\n", omp_get_thread_num(), first_part_len);
-            if (r - l == 1)
-                do_heapsort(first_arr, first_part_len);
-            else
-                first_arr = heapsort_on_cpus(first_arr, first_part_len, l, second_half - 1);
-        }
-
-        if (omp_get_thread_num() == second_half) {
-            // printf("thread=%d len2=%d\n", omp_get_thread_num(), second_part_len);
-            if (r - l == 1)
-                do_heapsort(second_arr, second_part_len);
-            else
-                second_arr = heapsort_on_cpus(second_arr, second_part_len, second_half, r);
-        }
-    }
-    return merge_arr(first_arr, first_part_len, second_arr, second_part_len);
-#else
-    do_heapsort(arr, len);
-    return arr;
-#endif
+	int i;
+	double *res = NULL;
+	int sum_len = 0;
+	for (i = 0; i < omp_get_num_procs() - 1; i++) {
+		sum_len += chunk;
+		res = malloc(sizeof(double) * chunk * (i + 1) * 2);
+		if (len - sum_len >= chunk) {
+			res = merge_arr(arr, sum_len, arr + sum_len, chunk);
+		} else {
+			res = merge_arr(arr, sum_len, arr + sum_len, len - sum_len);
+		}
+	}
+	return res;
 }
 
 double* heapsort(double *arr, int len)
 {
-	return heapsort_on_cpus(arr, len, 0, omp_get_num_procs() - 1);
+    int i;
+    int k = omp_get_num_procs();
+    int chunk = (len + k - 1) / k;
+
+    #pragma omp parallel for default(none) private(i) shared(k, len, chunk, arr)
+    for (i=0; i<k; i++)
+    {
+        int part_len = chunk < len - i * chunk ? chunk : len - i * chunk;
+        double *part_arr = arr + i * chunk;
+        printf("thread=%d part_len=%d\n", omp_get_thread_num(), part_len);
+        do_heapsort(part_arr, part_len);
+    }
+
+    return merge_all_arr(arr, len, chunk);
 }
+
+// double* heapsort_on_cpus(double *arr, int len, int l, int r)
+// {
+// #ifdef _OPENMP
+//     int first_part_len = len / 2;
+//     int second_part_len = len - first_part_len;
+//     double *first_arr = arr;
+//     double *second_arr = arr + first_part_len;
+    
+//     int second_half = l + (r + 1 - l) / 2;
+//     #pragma omp parallel
+//     {
+//         if (omp_get_thread_num() == l) {
+//             // printf("thread=%d len1=%d\n", omp_get_thread_num(), first_part_len);
+//             if (r - l == 1)
+//                 do_heapsort(first_arr, first_part_len);
+//             else
+//                 first_arr = heapsort_on_cpus(first_arr, first_part_len, l, second_half - 1);
+//         }
+
+//         if (omp_get_thread_num() == second_half) {
+//             // printf("thread=%d len2=%d\n", omp_get_thread_num(), second_part_len);
+//             if (r - l == 1)
+//                 do_heapsort(second_arr, second_part_len);
+//             else
+//                 second_arr = heapsort_on_cpus(second_arr, second_part_len, second_half, r);
+//         }
+//     }
+//     return merge_arr(first_arr, first_part_len, second_arr, second_part_len);
+// #else
+//     do_heapsort(arr, len);
+//     return arr;
+// #endif
+// }
+
+// double* heapsort(double *arr, int len)
+// {
+// 	return heapsort_on_cpus(arr, len, 0, omp_get_num_procs() - 1);
+// }
 
 double min_not_null(double *arr, int len)
 {
@@ -293,7 +310,7 @@ void do_main(int argc, char* argv[], int *status)
 	int A = 540;
 	unsigned int seed1, seed2;
 	// double X;
-	int iter = 50;
+	int iter = 1;
 
 	N = atoi(argv[1]); /* N равен первому параметру командной строки */
 	T1 = omp_get_wtime(); /* запомнить текущее время T1 */
@@ -324,7 +341,7 @@ void do_main(int argc, char* argv[], int *status)
 
 		N2 = N / 2;
 		M2 = heapsort(M2, N2);
-		// print_array(MERGED, N / 2);
+		print_array(M2, N2);
 
 		reduce(M2, N / 2);
 		// printf("X = %f\n", X);
