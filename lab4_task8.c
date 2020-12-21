@@ -24,6 +24,11 @@ int omp_get_num_procs()
 {
 	return 1;
 }
+
+int omp_get_thread_num()
+{
+	return 1;
+}
 #endif
 
 void fill_array(double *arr, int size, double left, double right, unsigned int *seedp)
@@ -221,7 +226,9 @@ double* heapsort(double *arr, int len)
     int k = omp_get_num_procs();
     int chunk = (len + k - 1) / k;
 
+    #ifdef _OPENMP
     #pragma omp parallel for default(none) private(i) shared(k, len, chunk, arr)
+    #endif
     for (i=0; i<k; i++)
     {
         int part_len = chunk < len - i * chunk ? chunk : len - i * chunk;
@@ -310,7 +317,7 @@ void do_main(int argc, char* argv[], int *status)
 	int A = 540;
 	unsigned int seed1, seed2;
 	// double X;
-	int iter = 1;
+	int iter = 50;
 
 	N = atoi(argv[1]); /* N равен первому параметру командной строки */
 	T1 = omp_get_wtime(); /* запомнить текущее время T1 */
