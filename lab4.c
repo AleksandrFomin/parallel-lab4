@@ -5,6 +5,33 @@
 #include <math.h>
 #include <unistd.h>
 
+enum lab_stages {
+	GENERATE = 0,
+	MAP,
+	COPY,
+	MERGE,
+	SORT,
+	REDUCE,
+	STAGES_AMOUNT,
+};
+
+long stages_time[STAGES_AMOUNT] = { 0 };
+
+void print_stages_time()
+{
+	int i;
+	for (i = 0; i < STAGES_AMOUNT; i++) {
+		printf(" %ld", stages_time[i]);
+	}
+
+	printf("\n");
+}
+
+long get_interval_us(double T1, double T2)
+{
+	return (T2 - T1) * 1000;
+}
+
 #if defined(_OPENMP)
 #include "omp.h"
 #else
@@ -24,14 +51,21 @@ void omp_set_nested(int val)
 void fill_array(double *arr, int size, double left, double right, unsigned int *seedp)
 {
 	int i;
+	double T1, T2;
+
+	T1 = omp_get_wtime();
 
 	#if defined(_OPENMP)
-	#pragma omp parallel for default(none) private(i) shared(seedp, right, left, size, arr)
+	#pragma omp parallel for default(none) private(i) shared(seedp, right, left, size, arr) schedule(dynamic, size / 4)
 	#endif
 	for (i = 0; i < size; i++) {
 		unsigned int seed_i = i + *seedp;
 		arr[i] = rand_r(&seed_i) / (double)RAND_MAX * (right - left) + left;
 	}
+
+	T2 = omp_get_wtime();
+
+	stages_time[GENERATE] += get_interval_us(T1, T2);
 }
 
 void print_array(double *arr, int size)
@@ -47,6 +81,8 @@ void print_array(double *arr, int size)
 void map_m1(double *arr, int size)
 {
 	int i;
+	double T1, T2;
+	T1 = omp_get_wtime();
 
 	#if defined(_OPENMP)
 	#pragma omp parallel for default(none) private(i) shared(arr, size)
@@ -54,11 +90,16 @@ void map_m1(double *arr, int size)
 	for (i = 0; i < size; i++) {
 		arr[i] = tanh(arr[i]) - 1;
 	}
+
+	T2 = omp_get_wtime();
+	stages_time[MAP] += get_interval_us(T1, T2);
 }
 
 void map_m2(double *arr, int size, double *arr_copy)
 {
 	int i;
+	double T1, T2;
+	T1 = omp_get_wtime();
 
 	#if defined(_OPENMP)
 	#pragma omp parallel for default(none) private(i) shared(arr, arr_copy, size)
@@ -69,22 +110,32 @@ void map_m2(double *arr, int size, double *arr_copy)
 			prev = arr_copy[i - 1];
 		arr[i] = sqrt(exp(1.0) * (arr_copy[i] + prev));
 	}
+
+	T2 = omp_get_wtime();
+	stages_time[MAP] += get_interval_us(T1, T2);
 }
 
 void copy_arr(double *src, int len, double *dst)
 {
 	int i;
+	double T1, T2;
+	T1 = omp_get_wtime();
 
 	#if defined(_OPENMP)
 	#pragma omp parallel for default(none) private(i) shared(src, dst, len)
 	#endif
 	for (i = 0; i < len; i++)
 		dst[i] = src[i];
+
+	T2 = omp_get_wtime();
+	stages_time[COPY] += get_interval_us(T1, T2);
 }
 
 void apply_merge_func(double *m1, double *m2, int m2_len)
 {
 	int i;
+	double T1, T2;
+	T1 = omp_get_wtime();
 
 	#if defined(_OPENMP)
 	#pragma omp parallel for default(none) private(i) shared(m1, m2, m2_len)
@@ -92,6 +143,9 @@ void apply_merge_func(double *m1, double *m2, int m2_len)
 	for (i = 0; i < m2_len; i++) {
 		m2[i] = fabs(m1[i] - m2[i]);
 	}
+
+	T2 = omp_get_wtime();
+	stages_time[MERGE] += get_interval_us(T1, T2);
 }
 
 void heapify(double *array, int n)
@@ -190,8 +244,12 @@ double min_not_null(double *arr, int len)
 double reduce(double *arr, int len)
 {
 	int i;
+	double T1, T2;
+
+	T1 = omp_get_wtime();
 	double min_val = min_not_null(arr, len);
 	double x = 0;
+
 
 	#if defined(_OPENMP)
 	#pragma omp parallel for default(none) private(i) shared(arr, len, min_val) reduction(+:x)
@@ -202,19 +260,23 @@ double reduce(double *arr, int len)
 			x += sin_val;
 		}
 	}
+
+	T2 = omp_get_wtime();
+	stages_time[REDUCE] += get_interval_us(T1, T2);
+
 	return x;
 }
 
 void do_main(int argc, char* argv[], int *status)
 {
 	int i, N, N2;
-	double T1, T2;
+	double T1, T2, T1_sort, T2_sort;
 	long delta_ms;
 	double *M1, *M2, *M2_copy, *MERGED;
 	int A = 540;
 	unsigned int seed1, seed2;
 	// double X;
-	int iter = 10;
+	int iter = 50;
 
 	N = atoi(argv[1]); /* N равен первому параметру командной строки */
 	T1 = omp_get_wtime(); /* запомнить текущее время T1 */
@@ -246,6 +308,8 @@ void do_main(int argc, char* argv[], int *status)
 
 		N2 = N / 2;
 
+		T1_sort = omp_get_wtime();
+
 		#if defined(_OPENMP)
 		#pragma omp parallel sections
 		{
@@ -259,13 +323,19 @@ void do_main(int argc, char* argv[], int *status)
 		heapsort(M2, N2);
 		#endif
 
+		T2_sort = omp_get_wtime();
+		stages_time[SORT] += get_interval_us(T1_sort, T2_sort);
+
+		// print_array(MERGED, N / 2);
+
 		reduce(MERGED, N / 2);
 		// printf("X = %f\n", X);
 	}
 	T2 = omp_get_wtime(); /* запомнить текущее время T2 */
 
-	delta_ms = (T2 - T1) * 1000;
-	printf("%d %ld\n", N, delta_ms); /* T2 - T1 */
+	delta_ms = get_interval_us(T1, T2);
+	printf("%d %ld", N, delta_ms); /* T2 - T1 */
+	print_stages_time();
 
 	free(M1);
 	free(M2);
@@ -288,7 +358,7 @@ void do_timer(int *status)
 		{
 			val = *status;
 		}
-		printf("Status = %d%%\n", val);
+		// printf("Status = %d%%\n", val);
 		sleep(1);
 	}
 }
